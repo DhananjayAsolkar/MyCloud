@@ -54,6 +54,7 @@ $script:DayNotes       = @{}   # yyyy-MM-dd -> free-text note for that diary pag
 $script:LastLoadedWriteTime = $null
 $script:LastLoadedDayNotesWriteTime = $null
 $script:CurrentPageDate = (Get-Date).Date
+$script:CurrentFilterName = 'All'   # All / Open / In Progress / Done / Assigned To Me
 
 # Reminder pop-ups must never be shared between users, so this state is
 # kept only in this process' memory (not written to tasks.json).
@@ -61,11 +62,12 @@ $script:SnoozeOverrides   = @{}   # TaskId -> DateTime the reminder should re-fi
 $script:ShownReminderKeys = @{}   # "TaskId|yyyyMMddHHmm" already shown this session
 $script:OpenReminderPopupCount = 0   # so multiple pop-ups at once don't stack on top of each other
 
-# Maps each visible row in the day-page checklist back to its Task Id, and
-# suppresses the checklist's own change events while it is being rebuilt
-# in code (so a refresh doesn't look like the user clicked a checkbox).
-$script:DayChecklistTaskIds = @()
+# Suppresses the checklist's own change events while it is being rebuilt in
+# code (so a refresh doesn't look like the user clicked a checkbox), and
+# tracks the two view-mode toggles.
 $script:SuppressDayChecklistEvents = $false
+$script:IsCompactMode = $false
+$script:IsLocked = $false
 
 # =========================================================================
 # 2. Helper functions - user/config handling
@@ -287,97 +289,193 @@ function Parse-TaskDate {
 }
 
 # =========================================================================
-# 6. GUI - main window shell
+# 6. GUI - main window shell (clean floating diary page)
 # =========================================================================
 
 $script:MainForm = New-Object System.Windows.Forms.Form
 $script:MainForm.Text = 'Team Calendar & Reminder'
-$script:MainForm.Size = New-Object System.Drawing.Size(1180, 720)
-$script:MainForm.MinimumSize = New-Object System.Drawing.Size(950, 550)
+$script:MainForm.Size = New-Object System.Drawing.Size(560, 680)
+$script:MainForm.MinimumSize = New-Object System.Drawing.Size(420, 420)
 $script:MainForm.StartPosition = 'CenterScreen'
 $script:MainForm.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+$script:MainForm.BackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
 
-# ---- Top toolbar panel -------------------------------------------------
-$pnlTop = New-Object System.Windows.Forms.Panel
-$pnlTop.Dock = 'Top'
-$pnlTop.Height = 78
-$pnlTop.BackColor = [System.Drawing.Color]::WhiteSmoke
-$script:MainForm.Controls.Add($pnlTop)
+$script:ToolTip = New-Object System.Windows.Forms.ToolTip
 
-function New-ToolButton {
-    param($Text, $X, $Y, $Width = 120)
-    $btn = New-Object System.Windows.Forms.Button
-    $btn.Text = $Text
-    $btn.Location = New-Object System.Drawing.Point($X, $Y)
-    $btn.Size = New-Object System.Drawing.Size($Width, 30)
-    return $btn
-}
+# ---- Slim top bar: day navigation, date, and a small right-hand cluster ---
+$pnlTopBar = New-Object System.Windows.Forms.Panel
+$pnlTopBar.Dock = 'Top'
+$pnlTopBar.Height = 104
+$pnlTopBar.BackColor = [System.Drawing.Color]::WhiteSmoke
 
-$btnAdd        = New-ToolButton 'Add Task'    10  8 100
-$btnEdit       = New-ToolButton 'Edit Task'   115 8 100
-$btnMarkDone   = New-ToolButton 'Mark as Done' 220 8 110
-$btnDelete     = New-ToolButton 'Delete Task' 335 8 100
-$btnRefresh    = New-ToolButton 'Refresh'     440 8 90
-$btnCarryFwd   = New-ToolButton 'Carry Forward Open Tasks' 535 8 180
-$btnExport     = New-ToolButton 'Export to CSV' 720 8 120
-$pnlTop.Controls.AddRange(@($btnAdd, $btnEdit, $btnMarkDone, $btnDelete, $btnRefresh, $btnCarryFwd, $btnExport))
+$btnPrevDay = New-Object System.Windows.Forms.Button
+$btnPrevDay.Text = '< Prev'
+$btnPrevDay.Location = New-Object System.Drawing.Point(10, 8)
+$btnPrevDay.Size = New-Object System.Drawing.Size(70, 28)
 
-$lblFilter = New-Object System.Windows.Forms.Label
-$lblFilter.Text = 'Filter:'
-$lblFilter.Location = New-Object System.Drawing.Point(10, 46)
-$lblFilter.Size = New-Object System.Drawing.Size(40, 24)
-$lblFilter.TextAlign = 'MiddleLeft'
+$btnToday = New-Object System.Windows.Forms.Button
+$btnToday.Text = 'Today'
+$btnToday.Location = New-Object System.Drawing.Point(88, 8)
+$btnToday.Size = New-Object System.Drawing.Size(64, 28)
 
-$script:cmbFilter = New-Object System.Windows.Forms.ComboBox
-$script:cmbFilter.Location = New-Object System.Drawing.Point(52, 44)
-$script:cmbFilter.Size = New-Object System.Drawing.Size(140, 24)
-$script:cmbFilter.DropDownStyle = 'DropDownList'
-[void]$script:cmbFilter.Items.AddRange(@('All', 'Open', 'In Progress', 'Done', 'Assigned To Me'))
-$script:cmbFilter.SelectedIndex = 0
+$btnNextDay = New-Object System.Windows.Forms.Button
+$btnNextDay.Text = 'Next >'
+$btnNextDay.Location = New-Object System.Drawing.Point(160, 8)
+$btnNextDay.Size = New-Object System.Drawing.Size(70, 28)
 
-$chkTopMost = New-Object System.Windows.Forms.CheckBox
-$chkTopMost.Text = 'Always on Top'
-$chkTopMost.Location = New-Object System.Drawing.Point(210, 46)
-$chkTopMost.Size = New-Object System.Drawing.Size(120, 24)
+$script:lblCurrentDate = New-Object System.Windows.Forms.Label
+$script:lblCurrentDate.Location = New-Object System.Drawing.Point(10, 42)
+$script:lblCurrentDate.Size = New-Object System.Drawing.Size(520, 30)
+$script:lblCurrentDate.Anchor = 'Top,Left,Right'
+$script:lblCurrentDate.TextAlign = 'MiddleCenter'
+$script:lblCurrentDate.ForeColor = [System.Drawing.Color]::Black
+$script:lblCurrentDate.Font = New-Object System.Drawing.Font('Segoe UI', 15, [System.Drawing.FontStyle]::Bold)
 
-$lblUser = New-Object System.Windows.Forms.Label
-$lblUser.Location = New-Object System.Drawing.Point(345, 46)
-$lblUser.Size = New-Object System.Drawing.Size(260, 24)
-$lblUser.TextAlign = 'MiddleLeft'
+$btnAddOnDay = New-Object System.Windows.Forms.Button
+$btnAddOnDay.Text = '+ Add Task'
+$btnAddOnDay.Location = New-Object System.Drawing.Point(10, 78)
+$btnAddOnDay.Size = New-Object System.Drawing.Size(110, 26)
 
-$btnChangeUser = New-Object System.Windows.Forms.Button
-$btnChangeUser.Text = 'Change User'
-$btnChangeUser.Location = New-Object System.Drawing.Point(610, 44)
-$btnChangeUser.Size = New-Object System.Drawing.Size(110, 26)
+$btnCompactToggle = New-Object System.Windows.Forms.Button
+$btnCompactToggle.Text = 'Compact View'
+$btnCompactToggle.Location = New-Object System.Drawing.Point(221, 78)
+$btnCompactToggle.Size = New-Object System.Drawing.Size(95, 26)
+$btnCompactToggle.Anchor = 'Top,Right'
 
-$pnlTop.Controls.AddRange(@($lblFilter, $script:cmbFilter, $chkTopMost, $lblUser, $btnChangeUser))
+$trackOpacity = New-Object System.Windows.Forms.TrackBar
+$trackOpacity.Location = New-Object System.Drawing.Point(324, 74)
+$trackOpacity.Size = New-Object System.Drawing.Size(90, 30)
+$trackOpacity.Anchor = 'Top,Right'
+$trackOpacity.Minimum = 40
+$trackOpacity.Maximum = 100
+$trackOpacity.Value = 100
+$trackOpacity.TickFrequency = 20
+$trackOpacity.TickStyle = 'None'
 
-# ---- Bottom status bar --------------------------------------------------
-$pnlStatus = New-Object System.Windows.Forms.Panel
-$pnlStatus.Dock = 'Bottom'
-$pnlStatus.Height = 26
-$pnlStatus.BackColor = [System.Drawing.Color]::Gainsboro
+$btnLock = New-Object System.Windows.Forms.Button
+$btnLock.Text = 'Lock'
+$btnLock.Location = New-Object System.Drawing.Point(422, 78)
+$btnLock.Size = New-Object System.Drawing.Size(45, 26)
+$btnLock.Anchor = 'Top,Right'
+
+$btnMore = New-Object System.Windows.Forms.Button
+$btnMore.Text = 'More'
+$btnMore.Location = New-Object System.Drawing.Point(475, 78)
+$btnMore.Size = New-Object System.Drawing.Size(55, 26)
+$btnMore.Anchor = 'Top,Right'
+
+$script:ToolTip.SetToolTip($btnCompactToggle, 'Switch between compact and normal view')
+$script:ToolTip.SetToolTip($trackOpacity, 'Window opacity - drag to make the window more see-through')
+$script:ToolTip.SetToolTip($btnLock, 'Lock this window on top of other windows')
+$script:ToolTip.SetToolTip($btnMore, 'More options: edit/delete task, filters, week view, future tasks, change log, export, change user')
+
+$pnlTopBar.Controls.AddRange(@(
+    $btnPrevDay, $btnToday, $btnNextDay, $script:lblCurrentDate,
+    $btnAddOnDay, $btnCompactToggle, $trackOpacity, $btnLock, $btnMore
+))
+
+# ---- Slim bottom status bar ---------------------------------------------
+$pnlStatusBar = New-Object System.Windows.Forms.Panel
+$pnlStatusBar.Dock = 'Bottom'
+$pnlStatusBar.Height = 24
+$pnlStatusBar.BackColor = [System.Drawing.Color]::WhiteSmoke
 $script:lblStatus = New-Object System.Windows.Forms.Label
-$script:lblStatus.Location = New-Object System.Drawing.Point(8, 4)
-$script:lblStatus.Size = New-Object System.Drawing.Size(700, 18)
-$script:lblTaskCount = New-Object System.Windows.Forms.Label
-$script:lblTaskCount.Location = New-Object System.Drawing.Point(900, 4)
-$script:lblTaskCount.Size = New-Object System.Drawing.Size(250, 18)
-$pnlStatus.Controls.AddRange(@($script:lblStatus, $script:lblTaskCount))
-$script:MainForm.Controls.Add($pnlStatus)
+$script:lblStatus.Dock = 'Fill'
+$script:lblStatus.TextAlign = 'MiddleLeft'
+$script:lblStatus.Padding = New-Object System.Windows.Forms.Padding(8, 0, 8, 0)
+$script:lblStatus.ForeColor = [System.Drawing.Color]::DimGray
+$pnlStatusBar.Controls.Add($script:lblStatus)
 
-# ---- Tab control ---------------------------------------------------------
-$script:tabControl = New-Object System.Windows.Forms.TabControl
-$script:tabControl.Dock = 'Fill'
-$script:MainForm.Controls.Add($script:tabControl)
+# ---- The diary page itself: a white card floating on the grey background --
+$pnlBackground = New-Object System.Windows.Forms.Panel
+$pnlBackground.Dock = 'Fill'
+$pnlBackground.BackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
+$pnlBackground.Padding = New-Object System.Windows.Forms.Padding(12)
 
-$tabDay     = New-Object System.Windows.Forms.TabPage 'Day View'
-$tabWeek    = New-Object System.Windows.Forms.TabPage 'This Week'
-$tabFuture  = New-Object System.Windows.Forms.TabPage 'Future Tasks'
-$tabLog     = New-Object System.Windows.Forms.TabPage 'Change Log'
-$script:tabControl.TabPages.AddRange(@($tabDay, $tabWeek, $tabFuture, $tabLog))
+$pnlDiaryPage = New-Object System.Windows.Forms.Panel
+$pnlDiaryPage.Dock = 'Fill'
+$pnlDiaryPage.BackColor = [System.Drawing.Color]::White
+$pnlDiaryPage.Padding = New-Object System.Windows.Forms.Padding(18)
+$pnlDiaryPage.Add_Paint({
+    param($sender, $e)
+    $rect = New-Object System.Drawing.Rectangle(0, 0, $sender.Width - 1, $sender.Height - 1)
+    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Gainsboro, 1)
+    $e.Graphics.DrawRectangle($pen, $rect)
+    $pen.Dispose()
+})
+
+$pnlDayNotes = New-Object System.Windows.Forms.Panel
+$pnlDayNotes.Dock = 'Bottom'
+$pnlDayNotes.Height = 110
+
+$lblDayNotes = New-Object System.Windows.Forms.Label
+$lblDayNotes.Text = 'Notes for this day'
+$lblDayNotes.Dock = 'Top'
+$lblDayNotes.Height = 22
+$lblDayNotes.ForeColor = [System.Drawing.Color]::DimGray
+
+$script:txtDayNotes = New-Object System.Windows.Forms.TextBox
+$script:txtDayNotes.Dock = 'Fill'
+$script:txtDayNotes.Multiline = $true
+$script:txtDayNotes.ScrollBars = 'Vertical'
+$script:txtDayNotes.BorderStyle = 'FixedSingle'
+$script:txtDayNotes.ForeColor = [System.Drawing.Color]::Black
+$script:txtDayNotes.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+
+$pnlDayNotes.Controls.Add($lblDayNotes)
+$pnlDayNotes.Controls.Add($script:txtDayNotes)
+
+$lblChecklistHeader = New-Object System.Windows.Forms.Label
+$lblChecklistHeader.Text = 'Tasks'
+$lblChecklistHeader.Dock = 'Top'
+$lblChecklistHeader.Height = 26
+$lblChecklistHeader.ForeColor = [System.Drawing.Color]::DimGray
+$lblChecklistHeader.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+
+# The checklist: a headerless, borderless, gridline-free ListView with
+# native checkboxes. Clicking a checkbox checks/unchecks (and selects) a
+# task, clicking its text just selects it, and double-clicking opens the
+# full Edit Task form. Columns give clean alignment without owner-draw.
+$script:lvDayChecklist = New-Object System.Windows.Forms.ListView
+$script:lvDayChecklist.Dock = 'Fill'
+$script:lvDayChecklist.View = 'Details'
+$script:lvDayChecklist.CheckBoxes = $true
+$script:lvDayChecklist.FullRowSelect = $true
+$script:lvDayChecklist.GridLines = $false
+$script:lvDayChecklist.HeaderStyle = 'None'
+$script:lvDayChecklist.MultiSelect = $false
+$script:lvDayChecklist.BorderStyle = 'None'
+$script:lvDayChecklist.BackColor = [System.Drawing.Color]::White
+$script:lvDayChecklist.Font = New-Object System.Drawing.Font('Segoe UI', 11.5)
+[void]$script:lvDayChecklist.Columns.Add('Task', 260)
+[void]$script:lvDayChecklist.Columns.Add('Due', 65)
+[void]$script:lvDayChecklist.Columns.Add('Priority', 65)
+[void]$script:lvDayChecklist.Columns.Add('Assigned', 90)
+$script:lvDayChecklist.Add_Resize({
+    if ($script:lvDayChecklist.Columns.Count -lt 4) { return }
+    $fixedWidth = $script:lvDayChecklist.Columns[1].Width + $script:lvDayChecklist.Columns[2].Width + $script:lvDayChecklist.Columns[3].Width
+    $newWidth = $script:lvDayChecklist.ClientSize.Width - $fixedWidth
+    if ($newWidth -gt 60) { $script:lvDayChecklist.Columns[0].Width = $newWidth }
+})
+
+$pnlDiaryPage.Controls.Add($pnlDayNotes)
+$pnlDiaryPage.Controls.Add($lblChecklistHeader)
+$pnlDiaryPage.Controls.Add($script:lvDayChecklist)
+
+$pnlBackground.Controls.Add($pnlDiaryPage)
+
+$script:MainForm.Controls.Add($pnlTopBar)
+$script:MainForm.Controls.Add($pnlStatusBar)
+$script:MainForm.Controls.Add($pnlBackground)
+
+# =========================================================================
+# 7. View refresh logic
+# =========================================================================
 
 function Add-StandardColumns {
+    # Used by the reference pop-up windows (This Week / Future Tasks), which
+    # keep the older multi-column grid look since they are secondary,
+    # read-only lookups rather than the main diary page.
     param([System.Windows.Forms.ListView]$ListView)
     $ListView.View = 'Details'
     $ListView.FullRowSelect = $true
@@ -394,153 +492,8 @@ function Add-StandardColumns {
     [void]$ListView.Columns.Add('Note', 230)
 }
 
-# ---- Day View tab: one diary page at a time, no month calendar grid ----
-$pnlDayNav = New-Object System.Windows.Forms.Panel
-$pnlDayNav.Dock = 'Top'
-$pnlDayNav.Height = 66
-$pnlDayNav.BackColor = [System.Drawing.Color]::WhiteSmoke
-
-$btnPrevDay = New-Object System.Windows.Forms.Button
-$btnPrevDay.Text = '< Previous Day'
-$btnPrevDay.Location = New-Object System.Drawing.Point(8, 6)
-$btnPrevDay.Size = New-Object System.Drawing.Size(110, 26)
-
-$btnToday = New-Object System.Windows.Forms.Button
-$btnToday.Text = 'Today'
-$btnToday.Location = New-Object System.Drawing.Point(126, 6)
-$btnToday.Size = New-Object System.Drawing.Size(70, 26)
-
-$btnNextDay = New-Object System.Windows.Forms.Button
-$btnNextDay.Text = 'Next Day >'
-$btnNextDay.Location = New-Object System.Drawing.Point(204, 6)
-$btnNextDay.Size = New-Object System.Drawing.Size(100, 26)
-
-$btnTomorrow = New-Object System.Windows.Forms.Button
-$btnTomorrow.Text = 'Tomorrow'
-$btnTomorrow.Location = New-Object System.Drawing.Point(312, 6)
-$btnTomorrow.Size = New-Object System.Drawing.Size(90, 26)
-
-$btnAddOnDay = New-Object System.Windows.Forms.Button
-$btnAddOnDay.Text = '+ Add Task'
-$btnAddOnDay.Location = New-Object System.Drawing.Point(630, 6)
-$btnAddOnDay.Size = New-Object System.Drawing.Size(120, 26)
-$btnAddOnDay.Anchor = 'Top,Right'
-
-$script:lblCurrentDate = New-Object System.Windows.Forms.Label
-$script:lblCurrentDate.Location = New-Object System.Drawing.Point(8, 36)
-$script:lblCurrentDate.Size = New-Object System.Drawing.Size(750, 26)
-$script:lblCurrentDate.Anchor = 'Top,Left,Right'
-$script:lblCurrentDate.TextAlign = 'MiddleCenter'
-$script:lblCurrentDate.Font = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
-
-$pnlDayNav.Controls.AddRange(@($btnPrevDay, $btnToday, $btnNextDay, $btnTomorrow, $btnAddOnDay, $script:lblCurrentDate))
-
-# The diary "page" itself: a plain white panel (no grid, no calendar blocks)
-# holding a vertical checklist of tasks, with a notes area pinned to the
-# bottom - like a blank planner page rather than a spreadsheet.
-$pnlDiaryPage = New-Object System.Windows.Forms.Panel
-$pnlDiaryPage.Dock = 'Fill'
-$pnlDiaryPage.BackColor = [System.Drawing.Color]::White
-$pnlDiaryPage.Padding = New-Object System.Windows.Forms.Padding(20)
-
-$pnlDayNotes = New-Object System.Windows.Forms.Panel
-$pnlDayNotes.Dock = 'Bottom'
-$pnlDayNotes.Height = 120
-
-$lblDayNotes = New-Object System.Windows.Forms.Label
-$lblDayNotes.Text = 'Notes for this day:'
-$lblDayNotes.Dock = 'Top'
-$lblDayNotes.Height = 20
-$lblDayNotes.ForeColor = [System.Drawing.Color]::DimGray
-
-$script:txtDayNotes = New-Object System.Windows.Forms.TextBox
-$script:txtDayNotes.Dock = 'Fill'
-$script:txtDayNotes.Multiline = $true
-$script:txtDayNotes.ScrollBars = 'Vertical'
-$script:txtDayNotes.Font = New-Object System.Drawing.Font('Segoe UI', 9)
-
-$pnlDayNotes.Controls.Add($lblDayNotes)
-$pnlDayNotes.Controls.Add($script:txtDayNotes)
-
-$lblChecklistHeader = New-Object System.Windows.Forms.Label
-$lblChecklistHeader.Text = 'Tasks:'
-$lblChecklistHeader.Dock = 'Top'
-$lblChecklistHeader.Height = 24
-$lblChecklistHeader.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-
-# A plain vertical checklist: click the checkbox to check/uncheck a task,
-# click the text to select it, double-click the text to open/edit it.
-$script:clbDayChecklist = New-Object System.Windows.Forms.CheckedListBox
-$script:clbDayChecklist.Dock = 'Fill'
-$script:clbDayChecklist.CheckOnClick = $false
-$script:clbDayChecklist.IntegralHeight = $false
-$script:clbDayChecklist.Font = New-Object System.Drawing.Font('Segoe UI', 11)
-$script:clbDayChecklist.HorizontalScrollbar = $true
-
-$pnlDiaryPage.Controls.Add($pnlDayNotes)
-$pnlDiaryPage.Controls.Add($lblChecklistHeader)
-$pnlDiaryPage.Controls.Add($script:clbDayChecklist)
-
-$tabDay.Controls.Add($pnlDayNav)
-$tabDay.Controls.Add($pnlDiaryPage)
-
-# ---- This Week tab -----------------------------------------------------
-$lblWeekTop = New-Object System.Windows.Forms.Panel
-$lblWeekTop.Dock = 'Top'
-$lblWeekTop.Height = 30
-$script:lblWeekRange = New-Object System.Windows.Forms.Label
-$script:lblWeekRange.Location = New-Object System.Drawing.Point(8, 6)
-$script:lblWeekRange.Size = New-Object System.Drawing.Size(400, 22)
-$script:lblWeekRange.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
-$lblWeekTop.Controls.Add($script:lblWeekRange)
-
-$script:lvWeekView = New-Object System.Windows.Forms.ListView
-$script:lvWeekView.Dock = 'Fill'
-Add-StandardColumns -ListView $script:lvWeekView
-
-$tabWeek.Controls.Add($lblWeekTop)
-$tabWeek.Controls.Add($script:lvWeekView)
-
-# ---- Future Tasks tab ---------------------------------------------------
-$script:lvFutureView = New-Object System.Windows.Forms.ListView
-$script:lvFutureView.Dock = 'Fill'
-Add-StandardColumns -ListView $script:lvFutureView
-$tabFuture.Controls.Add($script:lvFutureView)
-
-# ---- Change Log tab ------------------------------------------------------
-$pnlLogTop = New-Object System.Windows.Forms.Panel
-$pnlLogTop.Dock = 'Top'
-$pnlLogTop.Height = 34
-$btnLogRefresh = New-Object System.Windows.Forms.Button
-$btnLogRefresh.Text = 'Refresh Log'
-$btnLogRefresh.Location = New-Object System.Drawing.Point(8, 4)
-$btnLogRefresh.Size = New-Object System.Drawing.Size(100, 26)
-$pnlLogTop.Controls.Add($btnLogRefresh)
-
-$script:lvChangeLog = New-Object System.Windows.Forms.ListView
-$script:lvChangeLog.Dock = 'Fill'
-$script:lvChangeLog.View = 'Details'
-$script:lvChangeLog.FullRowSelect = $true
-$script:lvChangeLog.GridLines = $true
-[void]$script:lvChangeLog.Columns.Add('Timestamp', 140)
-[void]$script:lvChangeLog.Columns.Add('User', 110)
-[void]$script:lvChangeLog.Columns.Add('Action', 150)
-[void]$script:lvChangeLog.Columns.Add('Task Title', 180)
-[void]$script:lvChangeLog.Columns.Add('Details', 260)
-
-$tabLog.Controls.Add($pnlLogTop)
-$tabLog.Controls.Add($script:lvChangeLog)
-
-# =========================================================================
-# 7. View refresh logic
-# =========================================================================
-
 function Update-TaskListView {
     param([System.Windows.Forms.ListView]$ListView, [array]$Tasks)
-    # Remember which task (by Id) was selected so a background refresh
-    # doesn't silently wipe the user's selection out from under them.
-    $previousSelectedId = if ($ListView.SelectedItems.Count -gt 0) { $ListView.SelectedItems[0].Tag } else { $null }
-
     $ListView.BeginUpdate()
     $ListView.Items.Clear()
     $sorted = $Tasks | Sort-Object TaskDate, DueTime
@@ -563,16 +516,13 @@ function Update-TaskListView {
             $item.Font = New-Object System.Drawing.Font($ListView.Font, [System.Drawing.FontStyle]::Bold)
         }
         [void]$ListView.Items.Add($item)
-        if ($previousSelectedId -and $t.Id -eq $previousSelectedId) {
-            $item.Selected = $true
-        }
     }
     $ListView.EndUpdate()
 }
 
 function Apply-StatusFilter {
     param($Tasks)
-    switch ($script:cmbFilter.SelectedItem) {
+    switch ($script:CurrentFilterName) {
         'Open'            { return @($Tasks | Where-Object { $_.Status -eq 'Open' }) }
         'In Progress'     { return @($Tasks | Where-Object { $_.Status -eq 'In Progress' }) }
         'Done'            { return @($Tasks | Where-Object { $_.Status -eq 'Done' }) }
@@ -599,35 +549,55 @@ function Save-CurrentDayNote {
 }
 
 function Update-DayChecklist {
-    # Renders the diary page's task list as a plain vertical checklist:
-    # "[ ] Title - DueTime" per task, checked when the task is Done.
-    # This runs on every refresh (including background ones triggered by
-    # unrelated actions elsewhere in the app), so it must not disturb a
-    # task the user currently has selected or a note they're mid-typing.
+    # Renders the diary page's task list as a clean checklist: a checkbox,
+    # the title, the due time, a small priority label, and (only when it
+    # isn't you) who it's assigned to. Runs on every refresh, including
+    # background ones triggered by unrelated actions elsewhere in the app,
+    # so it must not disturb a task the user has selected or a note they
+    # are mid-typing.
     $dateKey = $script:CurrentPageDate.ToString('yyyy-MM-dd')
     $dayTasks = @($script:Tasks | Where-Object { $_.TaskDate -eq $dateKey })
     $dayTasks = @(Apply-StatusFilter -Tasks $dayTasks | Sort-Object DueTime, Title)
 
-    $previousSelectedId = if ($script:clbDayChecklist.SelectedIndex -ge 0 -and $script:clbDayChecklist.SelectedIndex -lt $script:DayChecklistTaskIds.Count) {
-        $script:DayChecklistTaskIds[$script:clbDayChecklist.SelectedIndex]
-    } else { $null }
+    $previousSelectedId = if ($script:lvDayChecklist.SelectedItems.Count -gt 0) { $script:lvDayChecklist.SelectedItems[0].Tag } else { $null }
 
     $script:SuppressDayChecklistEvents = $true
-    $script:clbDayChecklist.Items.Clear()
-    $script:DayChecklistTaskIds = @()
-    $newSelectedIndex = -1
+    $script:lvDayChecklist.BeginUpdate()
+    $script:lvDayChecklist.Items.Clear()
     foreach ($t in $dayTasks) {
-        $label = if ($t.DueTime) { "$($t.Title) - $($t.DueTime)" } else { $t.Title }
-        if ($t.AssignedTo -and $t.AssignedTo.Trim().ToLower() -ne $script:CurrentUser.Trim().ToLower()) {
-            $label = "$label  (Assigned: $($t.AssignedTo))"
+        $isDone = ($t.Status -eq 'Done')
+        $item = New-Object System.Windows.Forms.ListViewItem($t.Title)
+        $item.Tag = $t.Id
+        $item.Checked = $isDone
+        $item.UseItemStyleForSubItems = $false
+
+        $due = if ($t.DueTime) { $t.DueTime } else { '-' }
+        [void]$item.SubItems.Add($due)
+        [void]$item.SubItems.Add($t.Priority)
+        $assignedText = if ($t.AssignedTo -and $t.AssignedTo.Trim().ToLower() -ne $script:CurrentUser.Trim().ToLower()) { $t.AssignedTo } else { '' }
+        [void]$item.SubItems.Add($assignedText)
+
+        $baseColor = if ($isDone) { [System.Drawing.Color]::Gray } else { [System.Drawing.Color]::Black }
+        $item.SubItems[0].ForeColor = $baseColor
+        $item.SubItems[1].ForeColor = $baseColor
+        $item.SubItems[3].ForeColor = $baseColor
+        $item.SubItems[2].ForeColor = if ($isDone) {
+            [System.Drawing.Color]::Gray
+        } else {
+            switch ($t.Priority) {
+                'High'  { [System.Drawing.Color]::Firebrick }
+                'Low'   { [System.Drawing.Color]::Gray }
+                default { [System.Drawing.Color]::Black }
+            }
         }
-        [void]$script:clbDayChecklist.Items.Add($label, ($t.Status -eq 'Done'))
-        $script:DayChecklistTaskIds += $t.Id
-        if ($previousSelectedId -and $t.Id -eq $previousSelectedId) {
-            $newSelectedIndex = $script:DayChecklistTaskIds.Count - 1
+        if (-not $isDone -and $t.Priority -eq 'High') {
+            $item.Font = New-Object System.Drawing.Font($script:lvDayChecklist.Font, [System.Drawing.FontStyle]::Bold)
         }
+
+        [void]$script:lvDayChecklist.Items.Add($item)
+        if ($previousSelectedId -and $t.Id -eq $previousSelectedId) { $item.Selected = $true }
     }
-    if ($newSelectedIndex -ge 0) { $script:clbDayChecklist.SelectedIndex = $newSelectedIndex }
+    $script:lvDayChecklist.EndUpdate()
     $script:SuppressDayChecklistEvents = $false
 
     # Load this page's saved note - but never while the user has the box
@@ -637,71 +607,15 @@ function Update-DayChecklist {
     }
 }
 
-function Update-ChangeLogView {
-    $script:lvChangeLog.BeginUpdate()
-    $script:lvChangeLog.Items.Clear()
-    if (Test-Path $script:ChangeLogFile) {
-        try {
-            $entries = @(Import-Csv -Path $script:ChangeLogFile) | Sort-Object { [datetime]$_.Timestamp } -Descending
-            foreach ($e in $entries) {
-                $item = New-Object System.Windows.Forms.ListViewItem($e.Timestamp)
-                [void]$item.SubItems.Add($e.User)
-                [void]$item.SubItems.Add($e.Action)
-                [void]$item.SubItems.Add($e.TaskTitle)
-                [void]$item.SubItems.Add($e.Details)
-                [void]$script:lvChangeLog.Items.Add($item)
-            }
-        } catch { }
-    }
-    $script:lvChangeLog.EndUpdate()
-}
-
 function Refresh-AllViews {
-    # Day view (the diary page)
     $script:lblCurrentDate.Text = $script:CurrentPageDate.ToString('dddd, dd MMMM yyyy')
     Update-DayChecklist
-
-    # This week view (always the real current week)
-    $weekStart = Get-WeekStart -Date (Get-Date).Date
-    $weekEnd = $weekStart.AddDays(6)
-    $script:lblWeekRange.Text = "Week: $($weekStart.ToString('dd MMM yyyy')) - $($weekEnd.ToString('dd MMM yyyy'))"
-    $weekTasks = @($script:Tasks | Where-Object {
-        $d = Parse-TaskDate $_.TaskDate
-        $d -and $d -ge $weekStart -and $d -le $weekEnd
-    })
-    Update-TaskListView -ListView $script:lvWeekView -Tasks (Apply-StatusFilter -Tasks $weekTasks)
-
-    # Future tasks view
-    $futureTasks = @($script:Tasks | Where-Object {
-        $d = Parse-TaskDate $_.TaskDate
-        $d -and $d -gt (Get-Date).Date
-    })
-    Update-TaskListView -ListView $script:lvFutureView -Tasks (Apply-StatusFilter -Tasks $futureTasks)
-
-    # Change log view
-    Update-ChangeLogView
-
-    $script:lblTaskCount.Text = "Total tasks: $($script:Tasks.Count)"
-    $lblUser.Text = "Logged in as: $script:CurrentUser"
+    $script:lblStatus.Text = "$($script:Tasks.Count) task(s) total  |  Logged in as $script:CurrentUser"
 }
 
 function Get-SelectedTask {
-    if ($script:tabControl.SelectedIndex -eq 0) {
-        # Day view: the diary checklist tracks Task Ids in a parallel array
-        # since CheckedListBox rows are plain strings, not tagged objects.
-        $idx = $script:clbDayChecklist.SelectedIndex
-        if ($idx -lt 0 -or $idx -ge $script:DayChecklistTaskIds.Count) { return $null }
-        $id = $script:DayChecklistTaskIds[$idx]
-        return ($script:Tasks | Where-Object { $_.Id -eq $id } | Select-Object -First 1)
-    }
-
-    $activeListView = switch ($script:tabControl.SelectedIndex) {
-        1 { $script:lvWeekView }
-        2 { $script:lvFutureView }
-        default { $null }
-    }
-    if (-not $activeListView -or $activeListView.SelectedItems.Count -eq 0) { return $null }
-    $id = $activeListView.SelectedItems[0].Tag
+    if ($script:lvDayChecklist.SelectedItems.Count -eq 0) { return $null }
+    $id = $script:lvDayChecklist.SelectedItems[0].Tag
     return ($script:Tasks | Where-Object { $_.Id -eq $id } | Select-Object -First 1)
 }
 
@@ -949,10 +863,98 @@ function Show-ReminderPopup {
 }
 
 # =========================================================================
-# 10. Event wiring
+# 10. Reference pop-up windows (This Week / Future Tasks / Change Log)
+#     Kept out of the main diary page entirely - reached only via "More".
 # =========================================================================
 
-$btnAdd.Add_Click({
+function Show-ReferenceListPopup {
+    param([string]$Title, [array]$Tasks, [string]$RangeLabel = '')
+
+    $popup = New-Object System.Windows.Forms.Form
+    $popup.Text = $Title
+    $popup.Size = New-Object System.Drawing.Size(760, 480)
+    $popup.MinimumSize = New-Object System.Drawing.Size(500, 300)
+    $popup.StartPosition = 'CenterParent'
+
+    if ($RangeLabel) {
+        $lblRange = New-Object System.Windows.Forms.Label
+        $lblRange.Text = $RangeLabel
+        $lblRange.Dock = 'Top'
+        $lblRange.Height = 30
+        $lblRange.TextAlign = 'MiddleLeft'
+        $lblRange.Padding = New-Object System.Windows.Forms.Padding(8, 0, 0, 0)
+        $lblRange.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+        $popup.Controls.Add($lblRange)
+    }
+
+    $lv = New-Object System.Windows.Forms.ListView
+    $lv.Dock = 'Fill'
+    Add-StandardColumns -ListView $lv
+    Update-TaskListView -ListView $lv -Tasks $Tasks
+    $popup.Controls.Add($lv)
+
+    [void]$popup.ShowDialog($script:MainForm)
+}
+
+function Show-WeekPopup {
+    $weekStart = Get-WeekStart -Date (Get-Date).Date
+    $weekEnd = $weekStart.AddDays(6)
+    $weekTasks = @($script:Tasks | Where-Object {
+        $d = Parse-TaskDate $_.TaskDate
+        $d -and $d -ge $weekStart -and $d -le $weekEnd
+    })
+    $rangeLabel = "Week: $($weekStart.ToString('dd MMM yyyy')) - $($weekEnd.ToString('dd MMM yyyy'))"
+    Show-ReferenceListPopup -Title 'This Week' -Tasks (Apply-StatusFilter -Tasks $weekTasks) -RangeLabel $rangeLabel
+}
+
+function Show-FuturePopup {
+    $futureTasks = @($script:Tasks | Where-Object {
+        $d = Parse-TaskDate $_.TaskDate
+        $d -and $d -gt (Get-Date).Date
+    })
+    Show-ReferenceListPopup -Title 'Future Tasks' -Tasks (Apply-StatusFilter -Tasks $futureTasks)
+}
+
+function Show-ChangeLogPopup {
+    $popup = New-Object System.Windows.Forms.Form
+    $popup.Text = 'Change Log'
+    $popup.Size = New-Object System.Drawing.Size(820, 480)
+    $popup.MinimumSize = New-Object System.Drawing.Size(500, 300)
+    $popup.StartPosition = 'CenterParent'
+
+    $lv = New-Object System.Windows.Forms.ListView
+    $lv.Dock = 'Fill'
+    $lv.View = 'Details'
+    $lv.FullRowSelect = $true
+    $lv.GridLines = $true
+    [void]$lv.Columns.Add('Timestamp', 140)
+    [void]$lv.Columns.Add('User', 110)
+    [void]$lv.Columns.Add('Action', 150)
+    [void]$lv.Columns.Add('Task Title', 180)
+    [void]$lv.Columns.Add('Details', 260)
+
+    if (Test-Path $script:ChangeLogFile) {
+        try {
+            $entries = @(Import-Csv -Path $script:ChangeLogFile) | Sort-Object { [datetime]$_.Timestamp } -Descending
+            foreach ($e in $entries) {
+                $item = New-Object System.Windows.Forms.ListViewItem($e.Timestamp)
+                [void]$item.SubItems.Add($e.User)
+                [void]$item.SubItems.Add($e.Action)
+                [void]$item.SubItems.Add($e.TaskTitle)
+                [void]$item.SubItems.Add($e.Details)
+                [void]$lv.Items.Add($item)
+            }
+        } catch { }
+    }
+    $popup.Controls.Add($lv)
+    [void]$popup.ShowDialog($script:MainForm)
+}
+
+# =========================================================================
+# 11. Actions shared between the diary page and the "More" menu
+# =========================================================================
+
+function Invoke-AddTaskFlow {
     $result = Show-TaskEditor -DefaultDate $script:CurrentPageDate
     if ($result) {
         $newTask = New-TaskObject -Title $result.Title -Description $result.Description -TaskDate $result.TaskDate `
@@ -963,11 +965,9 @@ $btnAdd.Add_Click({
         [void](Save-Tasks)
         Refresh-AllViews
     }
-})
+}
 
-$btnAddOnDay.Add_Click({ $btnAdd.PerformClick() })
-
-$btnEdit.Add_Click({
+function Invoke-EditSelectedTask {
     $task = Get-SelectedTask
     if (-not $task) { [System.Windows.Forms.MessageBox]::Show('Please select a task first.', 'No Task Selected') | Out-Null; return }
     $result = Show-TaskEditor -ExistingTask $task
@@ -997,9 +997,9 @@ $btnEdit.Add_Click({
         [void](Save-Tasks)
         Refresh-AllViews
     }
-})
+}
 
-$btnMarkDone.Add_Click({
+function Invoke-MarkSelectedTaskDone {
     $task = Get-SelectedTask
     if (-not $task) { [System.Windows.Forms.MessageBox]::Show('Please select a task first.', 'No Task Selected') | Out-Null; return }
     if ($task.Status -eq 'Done') { [System.Windows.Forms.MessageBox]::Show('That task is already marked Done.', 'Already Done') | Out-Null; return }
@@ -1010,9 +1010,9 @@ $btnMarkDone.Add_Click({
     Write-ChangeLog -Action 'Task Completed' -TaskId $task.Id -TaskTitle $task.Title -Details "Completed on $($task.TaskDate)"
     [void](Save-Tasks)
     Refresh-AllViews
-})
+}
 
-$btnDelete.Add_Click({
+function Invoke-DeleteSelectedTask {
     $task = Get-SelectedTask
     if (-not $task) { [System.Windows.Forms.MessageBox]::Show('Please select a task first.', 'No Task Selected') | Out-Null; return }
     $confirm = [System.Windows.Forms.MessageBox]::Show("Delete task '$($task.Title)'?", 'Confirm Delete', 'YesNo', 'Question')
@@ -1024,22 +1024,22 @@ $btnDelete.Add_Click({
         [void](Save-Tasks)
         Refresh-AllViews
     }
-})
+}
 
-$btnRefresh.Add_Click({
+function Invoke-RefreshNow {
     Load-Tasks
     if (-not $script:txtDayNotes.Focused) { Load-DayNotes }
     [void](Invoke-CarryForward -Silent)
     Refresh-AllViews
     $script:lblStatus.Text = "Refreshed at $((Get-Date).ToString('HH:mm:ss'))"
-})
+}
 
-$btnCarryFwd.Add_Click({
+function Invoke-CarryForwardNow {
     [void](Invoke-CarryForward)
     Refresh-AllViews
-})
+}
 
-$btnExport.Add_Click({
+function Invoke-ExportTasksToCsv {
     $sfd = New-Object System.Windows.Forms.SaveFileDialog
     $sfd.InitialDirectory = $DataPath
     $sfd.FileName = "TasksExport_$((Get-Date).ToString('yyyyMMdd_HHmmss')).csv"
@@ -1053,17 +1053,81 @@ $btnExport.Add_Click({
             [System.Windows.Forms.MessageBox]::Show("Export failed: $($_.Exception.Message)", 'Export Error', 'OK', 'Error') | Out-Null
         }
     }
-})
+}
 
-$chkTopMost.Add_CheckedChanged({ $script:MainForm.TopMost = $chkTopMost.Checked })
-
-$btnChangeUser.Add_Click({
+function Invoke-ChangeUserFlow {
     Set-CurrentUser | Out-Null
     Refresh-AllViews
-})
+}
 
-$script:cmbFilter.Add_SelectedIndexChanged({ Refresh-AllViews })
-$script:tabControl.Add_SelectedIndexChanged({ Refresh-AllViews })
+# =========================================================================
+# 12. The "More" menu - everything that isn't on the main diary page
+# =========================================================================
+
+$script:MoreMenu = New-Object System.Windows.Forms.ContextMenuStrip
+
+$miEdit = New-Object System.Windows.Forms.ToolStripMenuItem 'Edit Task'
+$miMarkDone = New-Object System.Windows.Forms.ToolStripMenuItem 'Mark as Done'
+$miDelete = New-Object System.Windows.Forms.ToolStripMenuItem 'Delete Task'
+$miEdit.Add_Click({ Invoke-EditSelectedTask })
+$miMarkDone.Add_Click({ Invoke-MarkSelectedTaskDone })
+$miDelete.Add_Click({ Invoke-DeleteSelectedTask })
+
+$miFilter = New-Object System.Windows.Forms.ToolStripMenuItem 'Filter'
+$script:FilterMenuItems = @{}
+foreach ($filterName in @('All', 'Open', 'In Progress', 'Done', 'Assigned To Me')) {
+    $mi = New-Object System.Windows.Forms.ToolStripMenuItem $filterName
+    $mi.CheckOnClick = $false
+    $mi.Checked = ($filterName -eq 'All')
+    $mi.Add_Click({
+        param($sender, $e)
+        foreach ($kv in $script:FilterMenuItems.GetEnumerator()) { $kv.Value.Checked = $false }
+        $sender.Checked = $true
+        $script:CurrentFilterName = $sender.Text
+        Refresh-AllViews
+    })
+    [void]$miFilter.DropDownItems.Add($mi)
+    $script:FilterMenuItems[$filterName] = $mi
+}
+
+$miWeek = New-Object System.Windows.Forms.ToolStripMenuItem 'This Week...'
+$miFuture = New-Object System.Windows.Forms.ToolStripMenuItem 'Future Tasks...'
+$miChangeLog = New-Object System.Windows.Forms.ToolStripMenuItem 'Change Log...'
+$miWeek.Add_Click({ Show-WeekPopup })
+$miFuture.Add_Click({ Show-FuturePopup })
+$miChangeLog.Add_Click({ Show-ChangeLogPopup })
+
+$miRefresh = New-Object System.Windows.Forms.ToolStripMenuItem 'Refresh Now'
+$miCarryForward = New-Object System.Windows.Forms.ToolStripMenuItem 'Carry Forward Open Tasks Now'
+$miExport = New-Object System.Windows.Forms.ToolStripMenuItem 'Export to CSV...'
+$miRefresh.Add_Click({ Invoke-RefreshNow })
+$miCarryForward.Add_Click({ Invoke-CarryForwardNow })
+$miExport.Add_Click({ Invoke-ExportTasksToCsv })
+
+$miChangeUser = New-Object System.Windows.Forms.ToolStripMenuItem 'Change User...'
+$miChangeUser.Add_Click({ Invoke-ChangeUserFlow })
+
+[void]$script:MoreMenu.Items.Add($miEdit)
+[void]$script:MoreMenu.Items.Add($miMarkDone)
+[void]$script:MoreMenu.Items.Add($miDelete)
+[void]$script:MoreMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+[void]$script:MoreMenu.Items.Add($miFilter)
+[void]$script:MoreMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+[void]$script:MoreMenu.Items.Add($miWeek)
+[void]$script:MoreMenu.Items.Add($miFuture)
+[void]$script:MoreMenu.Items.Add($miChangeLog)
+[void]$script:MoreMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+[void]$script:MoreMenu.Items.Add($miRefresh)
+[void]$script:MoreMenu.Items.Add($miCarryForward)
+[void]$script:MoreMenu.Items.Add($miExport)
+[void]$script:MoreMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+[void]$script:MoreMenu.Items.Add($miChangeUser)
+
+# =========================================================================
+# 13. Event wiring
+# =========================================================================
+
+$btnAddOnDay.Add_Click({ Invoke-AddTaskFlow })
 
 $btnPrevDay.Add_Click({
     Save-CurrentDayNote
@@ -1080,26 +1144,20 @@ $btnToday.Add_Click({
     $script:CurrentPageDate = (Get-Date).Date
     Refresh-AllViews
 })
-$btnTomorrow.Add_Click({
-    Save-CurrentDayNote
-    $script:CurrentPageDate = (Get-Date).Date.AddDays(1)
-    Refresh-AllViews
-})
 
 $script:txtDayNotes.Add_Leave({ Save-CurrentDayNote })
 
-# Click the checkbox = check/uncheck (mark Done / reopen). Click the text
-# = select only. Double-click = open the full Edit Task form.
-$script:clbDayChecklist.Add_ItemCheck({
-    param($senderObj, $e)
+# Click the checkbox = check/uncheck (mark Done / reopen), and it also
+# selects the row. Click the task's text = select only. Double-click = open
+# the full Edit Task form.
+$script:lvDayChecklist.Add_ItemChecked({
+    param($sender, $e)
     if ($script:SuppressDayChecklistEvents) { return }
-    if ($e.Index -lt 0 -or $e.Index -ge $script:DayChecklistTaskIds.Count) { return }
-    $taskId = $script:DayChecklistTaskIds[$e.Index]
+    $taskId = $e.Item.Tag
     $task = $script:Tasks | Where-Object { $_.Id -eq $taskId } | Select-Object -First 1
     if (-not $task) { return }
 
-    $nowBecomingChecked = ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked)
-    if ($nowBecomingChecked) {
+    if ($e.Item.Checked) {
         $task.Status = 'Done'
         $task.CompletedDate = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
         Write-ChangeLog -Action 'Task Completed' -TaskId $task.Id -TaskTitle $task.Title -Details "Completed on $($task.TaskDate) (checklist)"
@@ -1112,21 +1170,43 @@ $script:clbDayChecklist.Add_ItemCheck({
     $task.LastModifiedDate = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     [void](Save-Tasks)
 
-    # Rebuilding the checklist from inside its own ItemCheck event is not
+    # Rebuilding the checklist from inside its own ItemChecked event is not
     # safe (the click hasn't finished being processed yet), so the refresh
     # is queued to run right after this event handler returns.
     $script:MainForm.BeginInvoke([Action]{ Refresh-AllViews }) | Out-Null
 })
 
-$script:clbDayChecklist.Add_DoubleClick({
-    $task = Get-SelectedTask
-    if ($task) { $btnEdit.PerformClick() }
+$script:lvDayChecklist.Add_DoubleClick({ Invoke-EditSelectedTask })
+
+# ---- Compact / Normal view toggle ---------------------------------------
+$btnCompactToggle.Add_Click({
+    $script:IsCompactMode = -not $script:IsCompactMode
+    $pnlDayNotes.Visible = -not $script:IsCompactMode
+    $lblChecklistHeader.Visible = -not $script:IsCompactMode
+    $btnCompactToggle.Text = if ($script:IsCompactMode) { 'Normal View' } else { 'Compact View' }
 })
 
-$btnLogRefresh.Add_Click({ Update-ChangeLogView })
+# ---- Lock (always on top) toggle ----------------------------------------
+$btnLock.Add_Click({
+    $script:IsLocked = -not $script:IsLocked
+    $script:MainForm.TopMost = $script:IsLocked
+    $btnLock.Text = if ($script:IsLocked) { 'Unlock' } else { 'Lock' }
+    $btnLock.BackColor = if ($script:IsLocked) { [System.Drawing.Color]::FromArgb(224, 236, 255) } else { [System.Drawing.SystemColors]::Control }
+})
+
+# ---- Opacity slider ------------------------------------------------------
+$trackOpacity.Add_Scroll({
+    $script:MainForm.Opacity = $trackOpacity.Value / 100.0
+    $script:ToolTip.SetToolTip($trackOpacity, "Opacity: $($trackOpacity.Value)%")
+})
+
+# ---- "More" menu ---------------------------------------------------------
+$btnMore.Add_Click({
+    $script:MoreMenu.Show($btnMore, (New-Object System.Drawing.Point(0, $btnMore.Height)))
+})
 
 # =========================================================================
-# 11. Timers - reminders + shared-file auto refresh
+# 14. Timers - reminders + shared-file auto refresh
 # =========================================================================
 
 $script:ReminderTimer = New-Object System.Windows.Forms.Timer
@@ -1177,7 +1257,7 @@ $script:AutoRefreshTimer.Add_Tick({
 $script:AutoRefreshTimer.Start()
 
 # =========================================================================
-# 12. Startup sequence
+# 15. Startup sequence
 # =========================================================================
 
 $script:CurrentUser = Get-CurrentUser

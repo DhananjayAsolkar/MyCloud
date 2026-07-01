@@ -20,8 +20,8 @@ Follow these steps in order. They only need to be done once per person.
 4. **The first time only**, a small box pops up asking for your name.
    Type your first name (or full name) and click OK. You only need to do
    this once - the tool will remember you after that.
-5. You're in! The window shows today's tasks. See "The buttons, in plain
-   English" below for what everything does.
+5. You're in! The window shows today's tasks on a clean white page. See
+   "Your diary page" below for what everything does.
 6. **To close the tool**, just close the window like any other program
    (click the X in the top-right corner). It is safe to close any time -
    nothing is lost, since every change is already saved automatically.
@@ -30,16 +30,16 @@ Follow these steps in order. They only need to be done once per person.
 Desktop so you don't have to hunt for the folder every day. Right-click the
 `.bat` file -> **Send to** -> **Desktop (create shortcut)**.
 
-### The Day View: your diary page
+### Your diary page
 
-The **Day View** tab is the main screen, and it is built to feel like a
-single page in a paper diary - not a spreadsheet and not a month-on-a-page
-calendar. It always shows **one date at a time**:
+The window is designed to feel like a small floating sticky note/diary
+page sitting on your desktop, not a big software dashboard. It always shows
+**one day at a time** on a plain white page:
 
 - The date is shown clearly at the top, e.g. **Tuesday, 01 July 2026**.
 - Underneath it is a plain checklist of that day's tasks, one line each:
-  `[ ] Prepare weekly status report - 16:00`
-  `[x] Call supplier - 11:00`
+  `[ ] Prepare weekly status report    16:00   High`
+  `[x] Call supplier                   11:00   Medium`
 - Below the checklist is a **Notes** box for anything you want to jot down
   about that specific day (it saves automatically as you move to another
   day or click elsewhere).
@@ -48,59 +48,75 @@ calendar. It always shows **one date at a time**:
 
 | Click | Result |
 |---|---|
-| Click directly on the little checkbox `[ ]` | Checks/unchecks the task - marks it Done or reopens it. |
-| Click on the task's text | Just selects that task (so Edit Task/Delete Task/Mark as Done know which one you mean). |
-| Double-click on the task's text | Opens the full Edit Task form for that task. |
+| Click directly on the checkbox | Checks/unchecks the task - marks it Done or reopens it. |
+| Click anywhere else on the row | Just selects that task (so Mark as Done/Edit/Delete from the More menu know which one you mean). |
+| Double-click the row | Opens the full Edit Task form for that task. |
 
-**Getting around the diary:**
+A task's Priority shows as a small coloured word next to its due time
+(red for High, plain black for Medium, grey for Low), and Done tasks turn
+grey with a ticked checkbox.
 
-| Button | What it does |
+### Getting around and the small controls
+
+| Control | What it does |
 |---|---|
-| **< Previous Day** / **Next Day >** | Step one day at a time, like turning a diary page. |
-| **Today** | Jump straight back to today. |
-| **Tomorrow** | Jump straight to tomorrow. |
+| **< Prev** / **Today** / **Next >** | Step through the diary one day at a time, or jump straight back to today. |
 | **+ Add Task** | Add a new task directly onto the day you're currently looking at. |
+| **Compact View / Normal View** | Compact hides the Notes box for a smaller, glance-only view; Normal shows everything. |
+| **Opacity slider** | Drag left to make the window see-through (handy for keeping it visible over other work), right for fully solid. It won't go below 40% so the text stays readable. |
+| **Lock / Unlock** | Lock keeps the window on top of every other window, like pinning a sticky note to your screen. |
+| **More** | Everything else - see below. |
 
-### The buttons in the top toolbar
+The window can be resized and moved anywhere on screen, just like any
+other window.
 
-| Button | What it does |
-|---|---|
-| **Add Task** | Opens a small form to type in a new task (what, when, who). |
-| **Edit Task** | Select a task first (see above), then click this to change it. |
-| **Mark as Done** | Select a task, then this - same as checking its checkbox. |
-| **Delete Task** | Select a task, then this - asks "are you sure?" before removing it. |
-| **Refresh** | Grabs the latest list in case a teammate just added something. |
-| **Carry Forward Open Tasks** | Moves yesterday's unfinished tasks onto today. Happens automatically too. |
-| **Export to CSV** | Saves the whole list as a file you can open in Excel. |
-| **Filter** dropdown | Show only Open / In Progress / Done / tasks assigned to you (applies to the diary page too). |
-| **Always on Top** | Tick this to keep the window visible over other programs. |
+### The "More" button
 
-There are three other tabs, kept as simple reference lists (not the main
-view) for when you want to see more than one day at once:
+To keep the main page uncluttered, everything you don't need every minute
+lives behind the **More** button in the top-right corner:
 
-- **This Week** = everything due Monday through Sunday of the current week.
-- **Future Tasks** = anything due after today.
-- **Change Log** = a history of every change anyone has made (who did what
-  and when) - useful if something looks wrong and you want to know why.
+- **Edit Task** / **Mark as Done** / **Delete Task** - act on whichever
+  task you selected on the checklist (same as clicking its checkbox for
+  Mark as Done, or double-clicking it for Edit).
+- **Filter** - show only Open / In Progress / Done / tasks assigned to you.
+  This applies to the diary page and to This Week / Future Tasks below.
+- **This Week...** / **Future Tasks...** - opens a small read-only window
+  listing everything due this week, or everything still to come.
+- **Change Log...** - opens a read-only window showing a history of every
+  change anyone has made (who did what and when) - useful if something
+  looks wrong and you want to know why.
+- **Refresh Now** - grabs the latest list immediately in case a teammate
+  just added something (it also happens automatically every 90 seconds).
+- **Carry Forward Open Tasks Now** - runs the carry-forward check
+  immediately (it also runs automatically every time the app starts).
+- **Export to CSV...** - saves the whole list as a file you can open in
+  Excel.
+- **Change User...** - change the name you're logged in as.
 
 ### A 2-minute test to make sure everything works
 
-1. Click **+ Add Task** (on the diary page), type a title like "Test task",
-   leave everything else as-is, and click OK. It should appear as a new
-   unchecked line at the bottom of today's checklist.
-2. Click directly on its checkbox - it should become checked, and the
-   toolbar's **Filter** dropdown set to "Done" should still show it.
-3. Click on its text once - it should highlight/select (not toggle the
-   checkbox). Double-click it - the Edit Task form should open; change the
-   title slightly and click OK.
-4. Click **This Week** - the task should also show up there (same week).
-5. Click **Change Log** - you should see rows for "Task Created", "Task
-   Completed" and "Task Edited" for your test task.
-6. Back on the diary page, select the task (single click its text) and
-   click **Delete Task**, confirm Yes - it disappears from the checklist
-   (it stays in the Change Log as a record).
+1. Click **+ Add Task**, type a title like "Test task", leave everything
+   else as-is, and click OK. It should appear as a new unchecked line at
+   the bottom of today's checklist.
+2. Click directly on its checkbox - it should become checked and turn grey.
+   Click it again to reopen it.
+3. Click on its row once (not the checkbox) - it should highlight/select.
+   Double-click it - the Edit Task form should open; change the title
+   slightly and click OK.
+4. Click **More -> This Week...** - the task should show up there too
+   (same week). Close that window.
+5. Click **More -> Change Log...** - you should see rows for "Task
+   Created", "Task Completed", "Task Reopened" and "Task Edited" for your
+   test task. Close that window.
+6. Click the **Lock** button (title should change to "Unlock" and the
+   window should stay on top of other windows), click it again to unlock.
+   Try the **Opacity** slider and the **Compact View** / **Normal View**
+   button too.
+7. Back on the diary page, select the test task and use **More -> Delete
+   Task**, confirm Yes - it disappears from the checklist (it stays in the
+   Change Log as a record).
 
-If all six steps behave as described, the tool is working correctly on
+If all seven steps behave as described, the tool is working correctly on
 your computer.
 
 ## Files in this folder
@@ -147,16 +163,16 @@ Technical details for anyone curious:
   and choose **"Run with PowerShell"**.
 - Your name is stored only on your own PC, in
   `%APPDATA%\TeamCalendarReminder\user.json`, never in the shared folder,
-  so it won't overwrite a teammate's name. Change it any time with the
-  **"Change User"** button.
+  so it won't overwrite a teammate's name. Change it any time via
+  **More -> Change User...**.
 
 ## 3. How the shared OneDrive/SharePoint folder works
 
 `tasks.json` and `change_log.csv` are plain text files that live in the
 synced folder. When one person adds or edits a task, the app saves the
 file, OneDrive/SharePoint syncs it, and everyone else's copy picks up the
-change the next time they hit **Refresh** or within about 90 seconds
-automatically.
+change the next time they use **More -> Refresh Now** or within about 90
+seconds automatically.
 
 This is a simple "last save wins" model, good enough for a small office
 team making occasional changes. It is **not** built for many people
@@ -170,8 +186,8 @@ case a file ever gets corrupted (see Common Errors below).
 ## 4. How incomplete tasks move to tomorrow
 
 Every time the app starts, refreshes (manually or automatically), or you
-click **Carry Forward Open Tasks**, it checks every task that is **not**
-marked Done:
+use **More -> Carry Forward Open Tasks Now**, it checks every task that is
+**not** marked Done:
 
 - If its date is in the past, the task's date is moved forward to **today**
   and a note is added: *"Carried forward from previous date (yyyy-mm-dd)."*
@@ -219,8 +235,8 @@ today, and the app window/process is still open. Also check your PC's
 clock and time zone are correct.
 
 **Two people edited the list at the same time and a change seems "lost"**
-This tool uses a simple last-save-wins approach (see section 3). Click
-**Refresh** often, and try to keep edits short.
+This tool uses a simple last-save-wins approach (see section 3). Use
+**More -> Refresh Now** often, and try to keep edits short.
 
 **The window looks tiny or oddly placed**
 Resize or move it as normal - it remembers nothing about window position
