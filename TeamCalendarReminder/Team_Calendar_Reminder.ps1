@@ -56,6 +56,7 @@ $script:CurrentPageDate = (Get-Date).Date
 # kept only in this process' memory (not written to tasks.json).
 $script:SnoozeOverrides   = @{}   # TaskId -> DateTime the reminder should re-fire
 $script:ShownReminderKeys = @{}   # "TaskId|yyyyMMddHHmm" already shown this session
+$script:OpenReminderPopupCount = 0   # so multiple pop-ups at once don't stack on top of each other
 
 # =========================================================================
 # 2. Helper functions - user/config handling
@@ -225,7 +226,7 @@ function Invoke-CarryForward {
         }
     }
 
-    if ($count -gt 0) { Save-Tasks }
+    if ($count -gt 0) { [void](Save-Tasks) }
     if (-not $Silent) {
         [System.Windows.Forms.MessageBox]::Show("Carried forward $count task(s) to today.", 'Carry Forward Complete') | Out-Null
     }
@@ -452,6 +453,10 @@ $tabLog.Controls.Add($script:lvChangeLog)
 
 function Update-TaskListView {
     param([System.Windows.Forms.ListView]$ListView, [array]$Tasks)
+    # Remember which task (by Id) was selected so a background refresh
+    # doesn't silently wipe the user's selection out from under them.
+    $previousSelectedId = if ($ListView.SelectedItems.Count -gt 0) { $ListView.SelectedItems[0].Tag } else { $null }
+
     $ListView.BeginUpdate()
     $ListView.Items.Clear()
     $sorted = $Tasks | Sort-Object TaskDate, DueTime
@@ -474,6 +479,9 @@ function Update-TaskListView {
             $item.Font = New-Object System.Drawing.Font($ListView.Font, [System.Drawing.FontStyle]::Bold)
         }
         [void]$ListView.Items.Add($item)
+        if ($previousSelectedId -and $t.Id -eq $previousSelectedId) {
+            $item.Selected = $true
+        }
     }
     $ListView.EndUpdate()
 }
@@ -604,7 +612,12 @@ function Show-TaskEditor {
     $dtpDate.Location = New-Object System.Drawing.Point($ctrlX, $y - 2)
     $dtpDate.Size = New-Object System.Drawing.Size($ctrlW, 22)
     $dtpDate.Format = 'Short'
-    $dtpDate.Value = if ($isEdit) { (Parse-TaskDate $ExistingTask.TaskDate) } else { $DefaultDate }
+    $dtpDate.Value = if ($isEdit) {
+        # Falls back to today if TaskDate is somehow missing/unparseable,
+        # so a damaged record can't crash the Edit dialog.
+        $parsedExistingDate = Parse-TaskDate $ExistingTask.TaskDate
+        if ($parsedExistingDate) { $parsedExistingDate } else { (Get-Date).Date }
+    } else { $DefaultDate }
     $dlg.Controls.AddRange(@($lblDate, $dtpDate))
     $y += $rowH
 
@@ -744,7 +757,15 @@ function Show-ReminderPopup {
     $popup.TopMost = $true
     $popup.StartPosition = 'Manual'
     $workArea = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-    $popup.Location = New-Object System.Drawing.Point(($workArea.Width - $popup.Width - 20), ($workArea.Height - $popup.Height - 20))
+
+    # If several reminders fire around the same time, stack the pop-ups
+    # upward instead of drawing them all in the exact same spot.
+    $stackIndex = $script:OpenReminderPopupCount
+    $script:OpenReminderPopupCount++
+    $yPos = $workArea.Height - $popup.Height - 20 - ($stackIndex * ($popup.Height + 10))
+    if ($yPos -lt 0) { $yPos = 20 }
+    $popup.Location = New-Object System.Drawing.Point(($workArea.Width - $popup.Width - 20), $yPos)
+    $popup.Add_FormClosed({ $script:OpenReminderPopupCount-- })
 
     $lblInfo = New-Object System.Windows.Forms.Label
     $lblInfo.Location = New-Object System.Drawing.Point(12, 12)
@@ -793,7 +814,7 @@ $btnAdd.Add_Click({
             -AssignedTo $result.AssignedTo -Status $result.Status -CreatedBy $script:CurrentUser
         [void]$script:Tasks.Add($newTask)
         Write-ChangeLog -Action 'Task Created' -TaskId $newTask.Id -TaskTitle $newTask.Title -Details "Date: $($newTask.TaskDate), Assigned: $($newTask.AssignedTo)"
-        Save-Tasks
+        [void](Save-Tasks)
         Refresh-AllViews
     }
 })
@@ -827,7 +848,7 @@ $btnEdit.Add_Click({
             $task.CompletedDate = ''
         }
         Write-ChangeLog -Action 'Task Edited' -TaskId $task.Id -TaskTitle $task.Title -Details "Status: $($task.Status), Date: $($task.TaskDate)"
-        Save-Tasks
+        [void](Save-Tasks)
         Refresh-AllViews
     }
 })
@@ -841,7 +862,7 @@ $btnMarkDone.Add_Click({
     $task.LastModifiedBy = $script:CurrentUser
     $task.LastModifiedDate = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     Write-ChangeLog -Action 'Task Completed' -TaskId $task.Id -TaskTitle $task.Title -Details "Completed on $($task.TaskDate)"
-    Save-Tasks
+    [void](Save-Tasks)
     Refresh-AllViews
 })
 
@@ -854,20 +875,20 @@ $btnDelete.Add_Click({
         foreach ($t in $script:Tasks) { if ($t.Id -ne $task.Id) { [void]$keep.Add($t) } }
         $script:Tasks = $keep
         Write-ChangeLog -Action 'Task Deleted' -TaskId $task.Id -TaskTitle $task.Title -Details "Deleted by $script:CurrentUser"
-        Save-Tasks
+        [void](Save-Tasks)
         Refresh-AllViews
     }
 })
 
 $btnRefresh.Add_Click({
     Load-Tasks
-    Invoke-CarryForward -Silent
+    [void](Invoke-CarryForward -Silent)
     Refresh-AllViews
     $script:lblStatus.Text = "Refreshed at $((Get-Date).ToString('HH:mm:ss'))"
 })
 
 $btnCarryFwd.Add_Click({
-    Invoke-CarryForward
+    [void](Invoke-CarryForward)
     Refresh-AllViews
 })
 
@@ -950,7 +971,7 @@ $script:AutoRefreshTimer.Add_Tick({
             $lastWrite = (Get-Item $script:TasksFile).LastWriteTime
             if ($lastWrite -ne $script:LastLoadedWriteTime) {
                 Load-Tasks
-                Invoke-CarryForward -Silent
+                [void](Invoke-CarryForward -Silent)
                 Refresh-AllViews
                 $script:lblStatus.Text = "Auto-refreshed at $((Get-Date).ToString('HH:mm:ss'))"
             }
@@ -965,7 +986,7 @@ $script:AutoRefreshTimer.Start()
 
 $script:CurrentUser = Get-CurrentUser
 Load-Tasks
-Invoke-CarryForward -Silent
+[void](Invoke-CarryForward -Silent)
 Refresh-AllViews
 $script:lblStatus.Text = "Loaded at $((Get-Date).ToString('HH:mm:ss')) from $DataPath"
 
