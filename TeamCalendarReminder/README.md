@@ -30,27 +30,54 @@ Follow these steps in order. They only need to be done once per person.
 Desktop so you don't have to hunt for the folder every day. Right-click the
 `.bat` file -> **Send to** -> **Desktop (create shortcut)**.
 
-### The buttons, in plain English
+### The Day View: your diary page
+
+The **Day View** tab is the main screen, and it is built to feel like a
+single page in a paper diary - not a spreadsheet and not a month-on-a-page
+calendar. It always shows **one date at a time**:
+
+- The date is shown clearly at the top, e.g. **Tuesday, 01 July 2026**.
+- Underneath it is a plain checklist of that day's tasks, one line each:
+  `[ ] Prepare weekly status report - 16:00`
+  `[x] Call supplier - 11:00`
+- Below the checklist is a **Notes** box for anything you want to jot down
+  about that specific day (it saves automatically as you move to another
+  day or click elsewhere).
+
+**Using the checklist with your mouse:**
+
+| Click | Result |
+|---|---|
+| Click directly on the little checkbox `[ ]` | Checks/unchecks the task - marks it Done or reopens it. |
+| Click on the task's text | Just selects that task (so Edit Task/Delete Task/Mark as Done know which one you mean). |
+| Double-click on the task's text | Opens the full Edit Task form for that task. |
+
+**Getting around the diary:**
+
+| Button | What it does |
+|---|---|
+| **< Previous Day** / **Next Day >** | Step one day at a time, like turning a diary page. |
+| **Today** | Jump straight back to today. |
+| **Tomorrow** | Jump straight to tomorrow. |
+| **+ Add Task** | Add a new task directly onto the day you're currently looking at. |
+
+### The buttons in the top toolbar
 
 | Button | What it does |
 |---|---|
 | **Add Task** | Opens a small form to type in a new task (what, when, who). |
-| **Edit Task** | Click a task in the list first, then click this to change it. |
-| **Mark as Done** | Click a task, then this - marks it finished (turns grey in the list). |
-| **Delete Task** | Click a task, then this - asks "are you sure?" before removing it. |
+| **Edit Task** | Select a task first (see above), then click this to change it. |
+| **Mark as Done** | Select a task, then this - same as checking its checkbox. |
+| **Delete Task** | Select a task, then this - asks "are you sure?" before removing it. |
 | **Refresh** | Grabs the latest list in case a teammate just added something. |
 | **Carry Forward Open Tasks** | Moves yesterday's unfinished tasks onto today. Happens automatically too. |
 | **Export to CSV** | Saves the whole list as a file you can open in Excel. |
-| **Filter** dropdown | Show only Open / In Progress / Done / tasks assigned to you. |
+| **Filter** dropdown | Show only Open / In Progress / Done / tasks assigned to you (applies to the diary page too). |
 | **Always on Top** | Tick this to keep the window visible over other programs. |
 
-The tabs across the top (**Day View**, **This Week**, **Future Tasks**,
-**Change Log**) are just different ways of looking at the same list:
+There are three other tabs, kept as simple reference lists (not the main
+view) for when you want to see more than one day at once:
 
-- **Day View** = today by default. Use **< Prev Day** / **Next Day >** to
-  step through the calendar one day at a time (click Next Day once to see
-  *tomorrow*), click **Today** to jump straight back, or click any date on
-  the small calendar on the right to jump there directly.
 - **This Week** = everything due Monday through Sunday of the current week.
 - **Future Tasks** = anything due after today.
 - **Change Log** = a history of every change anyone has made (who did what
@@ -58,16 +85,20 @@ The tabs across the top (**Day View**, **This Week**, **Future Tasks**,
 
 ### A 2-minute test to make sure everything works
 
-1. Click **Add Task**, type a title like "Test task", leave everything
-   else as-is, and click OK. It should appear in the **Day View** tab.
-2. Click that task in the list, click **Edit Task**, change the title
-   slightly, click OK - the list should update.
-3. Click the task again, click **Mark as Done** - it should turn grey.
+1. Click **+ Add Task** (on the diary page), type a title like "Test task",
+   leave everything else as-is, and click OK. It should appear as a new
+   unchecked line at the bottom of today's checklist.
+2. Click directly on its checkbox - it should become checked, and the
+   toolbar's **Filter** dropdown set to "Done" should still show it.
+3. Click on its text once - it should highlight/select (not toggle the
+   checkbox). Double-click it - the Edit Task form should open; change the
+   title slightly and click OK.
 4. Click **This Week** - the task should also show up there (same week).
 5. Click **Change Log** - you should see rows for "Task Created", "Task
-   Edited" and "Task Completed" for your test task.
-6. Click the task again (in Day View), click **Delete Task**, confirm Yes -
-   it disappears from the list (it stays in the Change Log as a record).
+   Completed" and "Task Edited" for your test task.
+6. Back on the diary page, select the task (single click its text) and
+   click **Delete Task**, confirm Yes - it disappears from the checklist
+   (it stays in the Change Log as a record).
 
 If all six steps behave as described, the tool is working correctly on
 your computer.
@@ -79,6 +110,7 @@ your computer.
 | `Team_Calendar_Reminder.ps1`       | The main application (PowerShell + WinForms GUI).          |
 | `Run_Team_Calendar_Reminder.bat`   | Double-click launcher (no need to touch PowerShell settings). |
 | `tasks.json`                       | Shared task data. Sample tasks are included to start with. |
+| `day_notes.json`                   | Shared per-day notes typed into the diary page's Notes box. |
 | `change_log.csv`                   | Shared audit trail of every change made to any task.        |
 | `README.md`                        | This file.                                                  |
 

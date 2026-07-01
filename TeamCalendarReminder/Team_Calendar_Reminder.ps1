@@ -48,8 +48,11 @@ if (-not $DataPath) { $DataPath = (Get-Location).Path }
 
 $script:TasksFile      = Join-Path $DataPath 'tasks.json'
 $script:ChangeLogFile  = Join-Path $DataPath 'change_log.csv'
+$script:DayNotesFile   = Join-Path $DataPath 'day_notes.json'
 $script:Tasks          = [System.Collections.ArrayList]::new()
+$script:DayNotes       = @{}   # yyyy-MM-dd -> free-text note for that diary page
 $script:LastLoadedWriteTime = $null
+$script:LastLoadedDayNotesWriteTime = $null
 $script:CurrentPageDate = (Get-Date).Date
 
 # Reminder pop-ups must never be shared between users, so this state is
@@ -57,6 +60,12 @@ $script:CurrentPageDate = (Get-Date).Date
 $script:SnoozeOverrides   = @{}   # TaskId -> DateTime the reminder should re-fire
 $script:ShownReminderKeys = @{}   # "TaskId|yyyyMMddHHmm" already shown this session
 $script:OpenReminderPopupCount = 0   # so multiple pop-ups at once don't stack on top of each other
+
+# Maps each visible row in the day-page checklist back to its Task Id, and
+# suppresses the checklist's own change events while it is being rebuilt
+# in code (so a refresh doesn't look like the user clicked a checkbox).
+$script:DayChecklistTaskIds = @()
+$script:SuppressDayChecklistEvents = $false
 
 # =========================================================================
 # 2. Helper functions - user/config handling
@@ -194,6 +203,35 @@ function Write-ChangeLog {
         Start-Sleep -Milliseconds 500
         try { $entry | Export-Csv -Path $script:ChangeLogFile -NoTypeInformation -Encoding UTF8 -Append } catch { }
     }
+}
+
+function Load-DayNotes {
+    # One free-text note per diary date, shared the same way tasks.json is.
+    $script:DayNotes = @{}
+    if (-not (Test-Path $script:DayNotesFile)) { return }
+    try {
+        $raw = Get-Content -Path $script:DayNotesFile -Raw -ErrorAction Stop
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            $obj = $raw | ConvertFrom-Json
+            foreach ($prop in $obj.PSObject.Properties) { $script:DayNotes[$prop.Name] = $prop.Value }
+        }
+        $script:LastLoadedDayNotesWriteTime = (Get-Item $script:DayNotesFile).LastWriteTime
+    } catch { }
+}
+
+function Save-DayNotes {
+    for ($i = 0; $i -lt 5; $i++) {
+        try {
+            $json = $script:DayNotes | ConvertTo-Json -Depth 3
+            $tmpFile = "$($script:DayNotesFile).tmp"
+            Set-Content -Path $tmpFile -Value $json -Encoding UTF8 -ErrorAction Stop
+            Move-Item -Path $tmpFile -Destination $script:DayNotesFile -Force -ErrorAction Stop
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 400
+        }
+    }
+    return $false
 }
 
 # =========================================================================
@@ -356,49 +394,95 @@ function Add-StandardColumns {
     [void]$ListView.Columns.Add('Note', 230)
 }
 
-# ---- Day View tab ----------------------------------------------------
+# ---- Day View tab: one diary page at a time, no month calendar grid ----
 $pnlDayNav = New-Object System.Windows.Forms.Panel
 $pnlDayNav.Dock = 'Top'
-$pnlDayNav.Height = 36
+$pnlDayNav.Height = 66
+$pnlDayNav.BackColor = [System.Drawing.Color]::WhiteSmoke
 
 $btnPrevDay = New-Object System.Windows.Forms.Button
-$btnPrevDay.Text = '< Prev Day'
-$btnPrevDay.Location = New-Object System.Drawing.Point(5, 4)
-$btnPrevDay.Size = New-Object System.Drawing.Size(90, 26)
+$btnPrevDay.Text = '< Previous Day'
+$btnPrevDay.Location = New-Object System.Drawing.Point(8, 6)
+$btnPrevDay.Size = New-Object System.Drawing.Size(110, 26)
 
 $btnToday = New-Object System.Windows.Forms.Button
 $btnToday.Text = 'Today'
-$btnToday.Location = New-Object System.Drawing.Point(100, 4)
+$btnToday.Location = New-Object System.Drawing.Point(126, 6)
 $btnToday.Size = New-Object System.Drawing.Size(70, 26)
 
 $btnNextDay = New-Object System.Windows.Forms.Button
 $btnNextDay.Text = 'Next Day >'
-$btnNextDay.Location = New-Object System.Drawing.Point(175, 4)
-$btnNextDay.Size = New-Object System.Drawing.Size(90, 26)
+$btnNextDay.Location = New-Object System.Drawing.Point(204, 6)
+$btnNextDay.Size = New-Object System.Drawing.Size(100, 26)
 
-$script:lblCurrentDate = New-Object System.Windows.Forms.Label
-$script:lblCurrentDate.Location = New-Object System.Drawing.Point(280, 8)
-$script:lblCurrentDate.Size = New-Object System.Drawing.Size(320, 22)
-$script:lblCurrentDate.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+$btnTomorrow = New-Object System.Windows.Forms.Button
+$btnTomorrow.Text = 'Tomorrow'
+$btnTomorrow.Location = New-Object System.Drawing.Point(312, 6)
+$btnTomorrow.Size = New-Object System.Drawing.Size(90, 26)
 
 $btnAddOnDay = New-Object System.Windows.Forms.Button
-$btnAddOnDay.Text = 'Add Task for This Day'
-$btnAddOnDay.Location = New-Object System.Drawing.Point(610, 4)
-$btnAddOnDay.Size = New-Object System.Drawing.Size(150, 26)
+$btnAddOnDay.Text = '+ Add Task'
+$btnAddOnDay.Location = New-Object System.Drawing.Point(630, 6)
+$btnAddOnDay.Size = New-Object System.Drawing.Size(120, 26)
+$btnAddOnDay.Anchor = 'Top,Right'
 
-$pnlDayNav.Controls.AddRange(@($btnPrevDay, $btnToday, $btnNextDay, $script:lblCurrentDate, $btnAddOnDay))
+$script:lblCurrentDate = New-Object System.Windows.Forms.Label
+$script:lblCurrentDate.Location = New-Object System.Drawing.Point(8, 36)
+$script:lblCurrentDate.Size = New-Object System.Drawing.Size(750, 26)
+$script:lblCurrentDate.Anchor = 'Top,Left,Right'
+$script:lblCurrentDate.TextAlign = 'MiddleCenter'
+$script:lblCurrentDate.Font = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
 
-$calDayView = New-Object System.Windows.Forms.MonthCalendar
-$calDayView.Dock = 'Right'
-$calDayView.MaxSelectionCount = 1
+$pnlDayNav.Controls.AddRange(@($btnPrevDay, $btnToday, $btnNextDay, $btnTomorrow, $btnAddOnDay, $script:lblCurrentDate))
 
-$script:lvDayView = New-Object System.Windows.Forms.ListView
-$script:lvDayView.Dock = 'Fill'
-Add-StandardColumns -ListView $script:lvDayView
+# The diary "page" itself: a plain white panel (no grid, no calendar blocks)
+# holding a vertical checklist of tasks, with a notes area pinned to the
+# bottom - like a blank planner page rather than a spreadsheet.
+$pnlDiaryPage = New-Object System.Windows.Forms.Panel
+$pnlDiaryPage.Dock = 'Fill'
+$pnlDiaryPage.BackColor = [System.Drawing.Color]::White
+$pnlDiaryPage.Padding = New-Object System.Windows.Forms.Padding(20)
+
+$pnlDayNotes = New-Object System.Windows.Forms.Panel
+$pnlDayNotes.Dock = 'Bottom'
+$pnlDayNotes.Height = 120
+
+$lblDayNotes = New-Object System.Windows.Forms.Label
+$lblDayNotes.Text = 'Notes for this day:'
+$lblDayNotes.Dock = 'Top'
+$lblDayNotes.Height = 20
+$lblDayNotes.ForeColor = [System.Drawing.Color]::DimGray
+
+$script:txtDayNotes = New-Object System.Windows.Forms.TextBox
+$script:txtDayNotes.Dock = 'Fill'
+$script:txtDayNotes.Multiline = $true
+$script:txtDayNotes.ScrollBars = 'Vertical'
+$script:txtDayNotes.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+
+$pnlDayNotes.Controls.Add($lblDayNotes)
+$pnlDayNotes.Controls.Add($script:txtDayNotes)
+
+$lblChecklistHeader = New-Object System.Windows.Forms.Label
+$lblChecklistHeader.Text = 'Tasks:'
+$lblChecklistHeader.Dock = 'Top'
+$lblChecklistHeader.Height = 24
+$lblChecklistHeader.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+
+# A plain vertical checklist: click the checkbox to check/uncheck a task,
+# click the text to select it, double-click the text to open/edit it.
+$script:clbDayChecklist = New-Object System.Windows.Forms.CheckedListBox
+$script:clbDayChecklist.Dock = 'Fill'
+$script:clbDayChecklist.CheckOnClick = $false
+$script:clbDayChecklist.IntegralHeight = $false
+$script:clbDayChecklist.Font = New-Object System.Drawing.Font('Segoe UI', 11)
+$script:clbDayChecklist.HorizontalScrollbar = $true
+
+$pnlDiaryPage.Controls.Add($pnlDayNotes)
+$pnlDiaryPage.Controls.Add($lblChecklistHeader)
+$pnlDiaryPage.Controls.Add($script:clbDayChecklist)
 
 $tabDay.Controls.Add($pnlDayNav)
-$tabDay.Controls.Add($calDayView)
-$tabDay.Controls.Add($script:lvDayView)
+$tabDay.Controls.Add($pnlDiaryPage)
 
 # ---- This Week tab -----------------------------------------------------
 $lblWeekTop = New-Object System.Windows.Forms.Panel
@@ -497,6 +581,62 @@ function Apply-StatusFilter {
     }
 }
 
+function Save-CurrentDayNote {
+    # Persists whatever is currently typed in the Notes box against the
+    # diary page that's on screen right now. Call this before navigating
+    # to a different day so a note is never silently lost.
+    $dateKey = $script:CurrentPageDate.ToString('yyyy-MM-dd')
+    $text = $script:txtDayNotes.Text
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        if ($script:DayNotes.ContainsKey($dateKey)) {
+            $script:DayNotes.Remove($dateKey)
+            [void](Save-DayNotes)
+        }
+    } elseif ($script:DayNotes[$dateKey] -ne $text) {
+        $script:DayNotes[$dateKey] = $text
+        [void](Save-DayNotes)
+    }
+}
+
+function Update-DayChecklist {
+    # Renders the diary page's task list as a plain vertical checklist:
+    # "[ ] Title - DueTime" per task, checked when the task is Done.
+    # This runs on every refresh (including background ones triggered by
+    # unrelated actions elsewhere in the app), so it must not disturb a
+    # task the user currently has selected or a note they're mid-typing.
+    $dateKey = $script:CurrentPageDate.ToString('yyyy-MM-dd')
+    $dayTasks = @($script:Tasks | Where-Object { $_.TaskDate -eq $dateKey })
+    $dayTasks = @(Apply-StatusFilter -Tasks $dayTasks | Sort-Object DueTime, Title)
+
+    $previousSelectedId = if ($script:clbDayChecklist.SelectedIndex -ge 0 -and $script:clbDayChecklist.SelectedIndex -lt $script:DayChecklistTaskIds.Count) {
+        $script:DayChecklistTaskIds[$script:clbDayChecklist.SelectedIndex]
+    } else { $null }
+
+    $script:SuppressDayChecklistEvents = $true
+    $script:clbDayChecklist.Items.Clear()
+    $script:DayChecklistTaskIds = @()
+    $newSelectedIndex = -1
+    foreach ($t in $dayTasks) {
+        $label = if ($t.DueTime) { "$($t.Title) - $($t.DueTime)" } else { $t.Title }
+        if ($t.AssignedTo -and $t.AssignedTo.Trim().ToLower() -ne $script:CurrentUser.Trim().ToLower()) {
+            $label = "$label  (Assigned: $($t.AssignedTo))"
+        }
+        [void]$script:clbDayChecklist.Items.Add($label, ($t.Status -eq 'Done'))
+        $script:DayChecklistTaskIds += $t.Id
+        if ($previousSelectedId -and $t.Id -eq $previousSelectedId) {
+            $newSelectedIndex = $script:DayChecklistTaskIds.Count - 1
+        }
+    }
+    if ($newSelectedIndex -ge 0) { $script:clbDayChecklist.SelectedIndex = $newSelectedIndex }
+    $script:SuppressDayChecklistEvents = $false
+
+    # Load this page's saved note - but never while the user has the box
+    # focused (mid-typing), so an unrelated refresh can't erase their draft.
+    if (-not $script:txtDayNotes.Focused) {
+        $script:txtDayNotes.Text = if ($script:DayNotes.ContainsKey($dateKey)) { $script:DayNotes[$dateKey] } else { '' }
+    }
+}
+
 function Update-ChangeLogView {
     $script:lvChangeLog.BeginUpdate()
     $script:lvChangeLog.Items.Clear()
@@ -517,11 +657,9 @@ function Update-ChangeLogView {
 }
 
 function Refresh-AllViews {
-    # Day view
+    # Day view (the diary page)
     $script:lblCurrentDate.Text = $script:CurrentPageDate.ToString('dddd, dd MMMM yyyy')
-    $dayDateStr = $script:CurrentPageDate.ToString('yyyy-MM-dd')
-    $dayTasks = @($script:Tasks | Where-Object { $_.TaskDate -eq $dayDateStr })
-    Update-TaskListView -ListView $script:lvDayView -Tasks (Apply-StatusFilter -Tasks $dayTasks)
+    Update-DayChecklist
 
     # This week view (always the real current week)
     $weekStart = Get-WeekStart -Date (Get-Date).Date
@@ -548,8 +686,16 @@ function Refresh-AllViews {
 }
 
 function Get-SelectedTask {
+    if ($script:tabControl.SelectedIndex -eq 0) {
+        # Day view: the diary checklist tracks Task Ids in a parallel array
+        # since CheckedListBox rows are plain strings, not tagged objects.
+        $idx = $script:clbDayChecklist.SelectedIndex
+        if ($idx -lt 0 -or $idx -ge $script:DayChecklistTaskIds.Count) { return $null }
+        $id = $script:DayChecklistTaskIds[$idx]
+        return ($script:Tasks | Where-Object { $_.Id -eq $id } | Select-Object -First 1)
+    }
+
     $activeListView = switch ($script:tabControl.SelectedIndex) {
-        0 { $script:lvDayView }
         1 { $script:lvWeekView }
         2 { $script:lvFutureView }
         default { $null }
@@ -882,6 +1028,7 @@ $btnDelete.Add_Click({
 
 $btnRefresh.Add_Click({
     Load-Tasks
+    if (-not $script:txtDayNotes.Focused) { Load-DayNotes }
     [void](Invoke-CarryForward -Silent)
     Refresh-AllViews
     $script:lblStatus.Text = "Refreshed at $((Get-Date).ToString('HH:mm:ss'))"
@@ -919,23 +1066,61 @@ $script:cmbFilter.Add_SelectedIndexChanged({ Refresh-AllViews })
 $script:tabControl.Add_SelectedIndexChanged({ Refresh-AllViews })
 
 $btnPrevDay.Add_Click({
+    Save-CurrentDayNote
     $script:CurrentPageDate = $script:CurrentPageDate.AddDays(-1)
-    $calDayView.SetDate($script:CurrentPageDate)
     Refresh-AllViews
 })
 $btnNextDay.Add_Click({
+    Save-CurrentDayNote
     $script:CurrentPageDate = $script:CurrentPageDate.AddDays(1)
-    $calDayView.SetDate($script:CurrentPageDate)
     Refresh-AllViews
 })
 $btnToday.Add_Click({
+    Save-CurrentDayNote
     $script:CurrentPageDate = (Get-Date).Date
-    $calDayView.SetDate($script:CurrentPageDate)
     Refresh-AllViews
 })
-$calDayView.Add_DateSelected({
-    $script:CurrentPageDate = $calDayView.SelectionStart.Date
+$btnTomorrow.Add_Click({
+    Save-CurrentDayNote
+    $script:CurrentPageDate = (Get-Date).Date.AddDays(1)
     Refresh-AllViews
+})
+
+$script:txtDayNotes.Add_Leave({ Save-CurrentDayNote })
+
+# Click the checkbox = check/uncheck (mark Done / reopen). Click the text
+# = select only. Double-click = open the full Edit Task form.
+$script:clbDayChecklist.Add_ItemCheck({
+    param($senderObj, $e)
+    if ($script:SuppressDayChecklistEvents) { return }
+    if ($e.Index -lt 0 -or $e.Index -ge $script:DayChecklistTaskIds.Count) { return }
+    $taskId = $script:DayChecklistTaskIds[$e.Index]
+    $task = $script:Tasks | Where-Object { $_.Id -eq $taskId } | Select-Object -First 1
+    if (-not $task) { return }
+
+    $nowBecomingChecked = ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked)
+    if ($nowBecomingChecked) {
+        $task.Status = 'Done'
+        $task.CompletedDate = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        Write-ChangeLog -Action 'Task Completed' -TaskId $task.Id -TaskTitle $task.Title -Details "Completed on $($task.TaskDate) (checklist)"
+    } else {
+        $task.Status = 'Open'
+        $task.CompletedDate = ''
+        Write-ChangeLog -Action 'Task Reopened' -TaskId $task.Id -TaskTitle $task.Title -Details "Reopened on $($task.TaskDate) (checklist)"
+    }
+    $task.LastModifiedBy = $script:CurrentUser
+    $task.LastModifiedDate = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    [void](Save-Tasks)
+
+    # Rebuilding the checklist from inside its own ItemCheck event is not
+    # safe (the click hasn't finished being processed yet), so the refresh
+    # is queued to run right after this event handler returns.
+    $script:MainForm.BeginInvoke([Action]{ Refresh-AllViews }) | Out-Null
+})
+
+$script:clbDayChecklist.Add_DoubleClick({
+    $task = Get-SelectedTask
+    if ($task) { $btnEdit.PerformClick() }
 })
 
 $btnLogRefresh.Add_Click({ Update-ChangeLogView })
@@ -967,14 +1152,25 @@ $script:AutoRefreshTimer = New-Object System.Windows.Forms.Timer
 $script:AutoRefreshTimer.Interval = 90000   # reload the shared file every 90 seconds
 $script:AutoRefreshTimer.Add_Tick({
     try {
+        $didReload = $false
         if (Test-Path $script:TasksFile) {
             $lastWrite = (Get-Item $script:TasksFile).LastWriteTime
             if ($lastWrite -ne $script:LastLoadedWriteTime) {
                 Load-Tasks
                 [void](Invoke-CarryForward -Silent)
-                Refresh-AllViews
-                $script:lblStatus.Text = "Auto-refreshed at $((Get-Date).ToString('HH:mm:ss'))"
+                $didReload = $true
             }
+        }
+        if ((-not $script:txtDayNotes.Focused) -and (Test-Path $script:DayNotesFile)) {
+            $lastNotesWrite = (Get-Item $script:DayNotesFile).LastWriteTime
+            if ($lastNotesWrite -ne $script:LastLoadedDayNotesWriteTime) {
+                Load-DayNotes
+                $didReload = $true
+            }
+        }
+        if ($didReload) {
+            Refresh-AllViews
+            $script:lblStatus.Text = "Auto-refreshed at $((Get-Date).ToString('HH:mm:ss'))"
         }
     } catch { }
 })
@@ -986,6 +1182,7 @@ $script:AutoRefreshTimer.Start()
 
 $script:CurrentUser = Get-CurrentUser
 Load-Tasks
+Load-DayNotes
 [void](Invoke-CarryForward -Silent)
 Refresh-AllViews
 $script:lblStatus.Text = "Loaded at $((Get-Date).ToString('HH:mm:ss')) from $DataPath"
