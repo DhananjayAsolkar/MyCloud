@@ -1,0 +1,7 @@
+"Timestamp","User","Action","TaskId","TaskTitle","Details"
+"2026-06-30 09:00:00","Dhananjay","Task Created","11111111-1111-1111-1111-111111111111","Prepare weekly status report","Date: 2026-07-01, Assigned: Dhananjay"
+"2026-06-30 09:05:00","Dhananjay","Task Created","22222222-2222-2222-2222-222222222222","Book conference room for team meeting","Date: 2026-07-02, Assigned: Priya"
+"2026-06-27 14:20:00","Dhananjay","Task Created","33333333-3333-3333-3333-333333333333","Follow up with vendor on invoice","Date: 2026-06-28, Assigned: Rahul"
+"2026-06-29 10:00:00","Dhananjay","Task Created","44444444-4444-4444-4444-444444444444","Submit monthly expense claim","Date: 2026-06-29, Assigned: Dhananjay"
+"2026-06-29 16:45:00","Dhananjay","Task Completed","44444444-4444-4444-4444-444444444444","Submit monthly expense claim","Completed on 2026-06-29"
+"2026-06-30 11:00:00","Dhananjay","Task Created","55555555-5555-5555-5555-555555555555","Plan quarterly team outing","Date: 2026-07-08, Assigned: Priya"
